@@ -1,10 +1,10 @@
 /*
   senseBox Home - Citizen Sensingplatform
-  Version: 2.2
-  Date: 2016-08-25
-  Homepage: https://www.sensebox.de https://opensensemap.org
-  Author: Jan Wirwahn, Institute for Geoinformatics, University of Muenster
-  Note: Sketch for senseBox Home Kit
+  Version: 2.3
+  Date: 2016-Nov-29
+  Homepage: https://www.sensebox.de https://www.opensensemap.org
+  Author: Institute for Geoinformatics, University of Muenster
+  Note: Sketch for senseBox:home
   Email: support@sensebox.de
 */
 
@@ -15,14 +15,31 @@
 #include <SPI.h>
 #include <Ethernet.h>
 
+//Upload interval in milliseconds
+const unsigned int postingInterval = 60000;
+
+//Configure static IP setup (only needed if DHCP is disabled)
+IPAddress myIp(192, 168, 0, 177);
+IPAddress myDns(192, 168, 0, 1);
+IPAddress myGateway(192, 168, 0, 1);
+IPAddress mySubnet(255, 255, 255, 0);
+
+//Ethernet configuration
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+char server[] = "@@OSEM_POST_DOMAIN@@";
+
+// ------------------------------------------------------
+// ------------------ CUSTOM SETTINGS -------------------
+// -- Do not change unless you know what you're doing. --
+// ------------------------------------------------------
+
 //senseBox ID
 
 //Sensor IDs
 
-//Configure ethernet connection
-IPAddress myIp(192, 168, 0, 42);
-byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-char server[] = "@@OSEM_POST_DOMAIN@@";
+// Always keep this number equal to the sensor ids you have above this comment
+const unsigned int phenomena = 5; //total count of measured phenomena
+
 EthernetClient client;
 
 //Load sensors
@@ -33,112 +50,110 @@ BMP280 BMP;
 //measurement variables
 float temperature = 0;
 float humidity = 0;
-double tempBaro, pressure;
-uint32_t lux;
-uint16_t uv;
-int messTyp;
+double tempBaro, pressure = 0;
+uint32_t lux = 0;
+uint16_t uv = 0;
+int count = 1;
+char result;
 #define UV_ADDR 0x38
 #define IT_1   0x1
 
-const unsigned int postingInterval = 60000;
 
 void setup() {
-  // Open serial communications and wait for port to open:
+  sleep(1000);
   Serial.begin(9600);
-  // start the Ethernet connection:
-  Serial.println("senseBox Home software version 2.2");
   Serial.println();
-  Serial.print("Starting ethernet connection...");
+  Serial.println("senseBox Home software version 2.3");
+  Serial.println();
+  sleep(1000);
+  ethernetConnect(); // start the Ethernet connection
+  initSensors(); // initialize the sensors
+  Serial.println("Starting loop.\n");
+}
 
+void loop() {
+  switch (count) {
+    case 1: //-----Temperature-----//
+      Serial.print("Temperature: ");
+      temperature = HDC.getTemp();
+      postMeasurement(TEMPSENSOR_ID, temperature, 2);
+      break;
+    case 2: //-----Humidity-----//
+      Serial.print("Humidity: ");
+      humidity = HDC.getHumi();
+      postMeasurement(HUMISENSOR_ID, humidity, 2);
+      break;
+    case 3: //-----Pressure-----//
+      Serial.print("Pressure: ");
+      result = BMP.startMeasurment();
+      if (result != 0) {
+        sleep(10);
+        result = BMP.getTemperatureAndPressure(tempBaro, pressure);
+        postMeasurement(PRESSURESENSOR_ID, pressure, 2);
+      }
+      break;
+    case 4: //-----Illuminance-----//
+      Serial.print("Illuminance: ");
+      lux = TSL.readLux();
+      postMeasurement(LUXSENSOR_ID, lux, 0);
+      break;
+    case 5: //-----UV Light-----//
+      Serial.print("UV intesity: ");
+      uv = getUV();
+      postMeasurement(UVSENSOR_ID, uv, 0);
+      break;
+  }
+  sleep(postingInterval);
+}
+
+void ethernetConnect(){
+  Serial.print("Initializing DHCP connection...");
   if (Ethernet.begin(mac) == 0) {
-    Serial.println("Failed to configure Ethernet using DHCP");
-    Ethernet.begin(mac, myIp);
-  } else {
+    Serial.println("failed! Trying static IP setup.");
+    Ethernet.begin(mac, myIp, myDns, myGateway, mySubnet);
+    //@TODO: Add reference to support site for network settings
+  }
+  else {
     Serial.println("done!");
   }
-  delay(1000);
-  //Initialize sensors
+  sleep(1000);
+}
+
+void initSensors(){
   Serial.print("Initializing sensors...");
   Wire.begin();
   Wire.beginTransmission(UV_ADDR);
   Wire.write((IT_1 << 2) | 0x02);
   Wire.endTransmission();
-  delay(500);
+  sleep(500);
   HDC.begin(HDC100X_TEMP_HUMI, HDC100X_14BIT, HDC100X_14BIT, DISABLE);
   TSL.begin();
   BMP.begin();
   BMP.setOversampling(4);
   Serial.println("done!");
-  Serial.println("Starting loop.");
   temperature = HDC.getTemp();
 }
 
-void loop() {
-  // if there are incoming bytes available
-  // from the server, read them and print them:
-  if (client.available()) {
-    char c = client.read();
-    Serial.print(c);
-    //Serial.write(c);
-  }
-
-  //-----Pressure-----//
-  Serial.println("Posting pressure");
-  messTyp = 2;
-  char result = BMP.startMeasurment();
-  if (result != 0) {
-    delay(result);
-    result = BMP.getTemperatureAndPressure(tempBaro, pressure);
-    postObservation(pressure, PRESSURESENSOR_ID, SENSEBOX_ID);
-  }
-  delay(2000);
-  //-----Humidity-----//
-  Serial.println("Posting humidity");
-  messTyp = 2;
-  humidity = HDC.getHumi();
-  postObservation(humidity, HUMISENSOR_ID, SENSEBOX_ID);
-  delay(2000);
-  //-----Temperature-----//
-  Serial.println("Posting temperature");
-  messTyp = 2;
-  temperature = HDC.getTemp();
-  postObservation(temperature, TEMPSENSOR_ID, SENSEBOX_ID);
-  delay(2000);
-  //-----Lux-----//
-  Serial.println("Posting illuminance");
-  messTyp = 1;
-  lux = TSL.readLux();
-  postObservation(lux, LUXSENSOR_ID, SENSEBOX_ID);
-  delay(2000);
-  //UV intensity
-  messTyp = 1;
-  uv = getUV();
-  postObservation(uv, UVSENSOR_ID, SENSEBOX_ID);
-
-  sleep(postingInterval);
-}
-
-void postObservation(float measurement, String sensorId, String boxId) {
+void postMeasurement(String sensorId, float measurement, int decimals) {
+  //convert float to string
   char obs[10];
-  if (messTyp == 1) dtostrf(measurement, 5, 0, obs);
-  else if (messTyp == 2) dtostrf(measurement, 5, 2, obs);
-  Serial.println(obs);
-  //json must look like: {"value":"12.5"}
-  //post observation to: /boxes/boxId/sensorId
-  Serial.println("connecting...");
+  dtostrf(measurement, 5, decimals, obs); //dtostrf(double __val,signed char __width,unsigned char __prec,char *__s)
+  //json object must look like: {"value":"12.5"}
   String value = "{\"value\":";
   value += obs;
   value += "}";
-  if (client.connect(server, 8000))
-  {
-    Serial.println("connected");
-    // Make a HTTP Post request:
+  Serial.println(value);
+  //connect to OSeM and HTTP POST data
+  Serial.print("Connecting to server...");
+  if (client.connect(server, 8000)) {
+    Serial.println("connected.\n");
+    // perform HTTP POST request to: osem.org:8000/boxes/boxId/sensorId
     client.print("POST /boxes/");
-    client.print(boxId);
+    client.print(SENSEBOX_ID);
     client.print("/");
     client.print(sensorId);
     client.println(" HTTP/1.1");
-    // Send the required header parameters
+    // send required header parameters
     client.print("Host:");
     client.println(server);
     client.println("Content-Type: application/json");
@@ -146,34 +161,42 @@ void postObservation(float measurement, String sensorId, String boxId) {
     client.print("Content-Length: ");
     client.println(value.length());
     client.println();
-    // Send the data
+    // Send the json object
     client.print(value);
     client.println();
+
+    if (count < phenomena) count++;
+    else count = 1;
+
+    waitForResponse();
   }
-  waitForResponse();
+  else {
+    Serial.println("connection to server failed. Restarting system in 5 seconds...");
+    sleep(5000);
+    software_Reset();
+  }
+  Serial.println("___________________________________\n");
 }
+
 
 void waitForResponse()
 {
-  // if there are incoming bytes available
-  // from the server, read them and print them:
+  // if there are incoming bytes from the server, read and print them
+  sleep(100);
+  String response = "";
+  char c;
   boolean repeat = true;
   do {
-    if (client.available())
-    {
-      char c = client.read();
-      Serial.print(c);
-    }
-    // if the servers disconnected, stop the client:
-    if (!client.connected())
-    {
-      Serial.println();
-      Serial.println("disconnecting.");
-      client.stop();
-      repeat = false;
-    }
+    if (client.available()) c = client.read();
+    else repeat = false;
+    response += c;
+    if (response == "HTTP/1.1 ") response = "";
+    if (c == '\n') repeat = false;
   }
   while (repeat);
+
+  Serial.print("Server Response: "); Serial.println(response);
+  client.stop();
 }
 
 uint16_t getUV() {
@@ -181,11 +204,11 @@ uint16_t getUV() {
   uint16_t uvValue;
 
   Wire.requestFrom(UV_ADDR + 1, 1); //MSB
-  delay(1);
+  sleep(1);
   if (Wire.available()) msb = Wire.read();
 
   Wire.requestFrom(UV_ADDR + 0, 1); //LSB
-  delay(1);
+  sleep(1);
   if (Wire.available()) lsb = Wire.read();
 
   uvValue = (msb << 8) | lsb;
@@ -194,12 +217,17 @@ uint16_t getUV() {
 }
 
 // millis() rollover fix - http://arduino.stackexchange.com/questions/12587/how-can-i-handle-the-millis-rollover
-void sleep(unsigned long ms) {            // ms: duration
-  unsigned long start = millis();         // start: timestamp
+void sleep(unsigned long ms) {
+  unsigned long start = millis();
   for (;;) {
-    unsigned long now = millis();         // now: timestamp
-    unsigned long elapsed = now - start;  // elapsed: duration
-    if (elapsed >= ms)                    // comparing durations: OK
+    unsigned long now = millis();
+    unsigned long elapsed = now - start;
+    if (elapsed >= ms)
       return;
   }
+}
+
+// Restarts program from beginning but does not reset the peripherals and registers - http://forum.arduino.cc/index.php?topic=49581.0
+void software_Reset(){
+  asm volatile ("  jmp 0");
 }
